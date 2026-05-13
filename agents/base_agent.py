@@ -23,7 +23,7 @@ class BaseAgent(ABC):
     """
 
     name: str = "BaseAgent"
-    model_name: str = "gemini-1.5-flash"
+    model_name: str = "gemini-1.5-flash-latest"
 
     def __init__(self, session_id: str | None = None, booking_id: str | None = None):
         self.session_id = session_id or str(uuid.uuid4())

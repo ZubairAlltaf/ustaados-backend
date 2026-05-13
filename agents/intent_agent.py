@@ -101,7 +101,7 @@ Return JSON only:"""
                 "language_detected": "unknown",
                 "confidence": 0.3,
                 "needs_clarification": True,
-                "clarification_question": "Please describe your issue in more detail.",
+                "clarification_question": "Maazrat, mujhe theek se samajh nahi aayi. Kya aap tafseel se masla bata sakte hain?",
                 "summary": f"Parse failed ({str(e)[:50]}). Clarification needed.",
                 "raw_parsed": {},
             }
