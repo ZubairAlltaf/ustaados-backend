@@ -21,6 +21,11 @@ from config import (
     OPENWEATHER_API_KEY, OPENWEATHER_CITY,
     GOOGLE_MAPS_API_KEY
 )
+import time
+
+# ── Module-level weather cache (10 min TTL) ───────────────────────────────
+_weather_cache: dict = {}   # key: "lat,lng" → {"temp": float, "ts": float}
+_WEATHER_CACHE_TTL = 600    # seconds
 
 
 class UstaadOrchestrator:
@@ -330,9 +335,15 @@ class UstaadOrchestrator:
     # ─── Private Helpers ──────────────────────────────────────────────────
 
     async def _get_weather_temp(self, lat: float = None, lng: float = None) -> float:
-        """Fetch current temperature from OpenWeather API using lat/lng or fallback city."""
+        """Fetch current temperature from OpenWeather API using lat/lng or fallback city.
+        Results are cached for 10 minutes to avoid hammering the API."""
         if not OPENWEATHER_API_KEY:
             return 38.0  # Fallback for dev
+
+        cache_key = f"{round(lat or 0, 2)},{round(lng or 0, 2)}"
+        cached = _weather_cache.get(cache_key)
+        if cached and (time.time() - cached["ts"]) < _WEATHER_CACHE_TTL:
+            return cached["temp"]
 
         try:
             if lat and lng:
@@ -341,28 +352,32 @@ class UstaadOrchestrator:
             else:
                 url = (f"https://api.openweathermap.org/data/2.5/weather"
                        f"?q={OPENWEATHER_CITY}&appid={OPENWEATHER_API_KEY}&units=metric")
-                
+
             async with httpx.AsyncClient(timeout=5.0) as client:
                 resp = await client.get(url)
                 data = resp.json()
-                return float(data["main"]["temp"])
+                temp = float(data["main"]["temp"])
+                _weather_cache[cache_key] = {"temp": temp, "ts": time.time()}
+                return temp
         except Exception:
             return 38.0  # Safe fallback
 
     async def _fetch_providers(self, service_type: str, urgency: str,
-                                user_lat: float, user_lng: float) -> list:
-        """Fetch candidate providers from Supabase."""
+                                user_lat: float, user_lng: float,
+                                city: str = "Lahore") -> list:
+        """Fetch candidate providers from Supabase filtered by city and service."""
         try:
             db = get_db()
             query = (db.table("providers")
                      .select("*")
                      .eq("active_status", True)
-                     .eq("city", "Lahore"))
+                     .eq("city", city))
 
             if urgency in ["high", "critical"]:
                 query = query.gte("trust_score", 35)
 
-            result = query.limit(50).execute()
+            # Premium engineers first
+            result = query.order("trust_score", desc=True).limit(50).execute()
             providers = result.data or []
 
             # Filter by specialization

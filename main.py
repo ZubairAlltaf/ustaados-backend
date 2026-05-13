@@ -554,6 +554,115 @@ async def mark_notification_read(notification_id: str):
     db.table("notifications").update({"is_read": True}).eq("id", notification_id).execute()
     return {"success": True}
 
+# ─── Engineers ─────────────────────────────────────────────────────────────────
+
+class EngineerRegisterBody(BaseModel):
+    name: str
+    phone: str
+    city: str
+    area: Optional[str] = ""
+    specialization: List[str] = []
+    visiting_fee: int = 500
+    experience_years: int = 1
+    service_prices: dict = {}
+    user_id: Optional[str] = None
+
+class AvailabilityBody(BaseModel):
+    status: str  # available, busy, offline
+
+@app.post("/api/v1/engineers/register", tags=["Engineers"])
+async def register_engineer(body: EngineerRegisterBody):
+    """Register a new engineer/provider."""
+    db = get_db()
+    try:
+        provider_data = {
+            "name": body.name,
+            "phone": body.phone,
+            "city": body.city,
+            "area": body.area,
+            "specialization": body.specialization,
+            "experience_years": body.experience_years,
+            "active_status": True,
+            "is_verified": False,
+            "trust_score": 50.0,
+            "price_ranges": body.service_prices,
+            "visiting_fee": body.visiting_fee,
+            "service_prices": body.service_prices,
+            "availability_status": "available",
+        }
+        if body.user_id:
+            provider_data["user_id"] = body.user_id
+
+        result = db.table("providers").insert(provider_data).execute()
+        provider = result.data[0] if result.data else {}
+
+        # Also create service_pricing records
+        for service, price in body.service_prices.items():
+            try:
+                db.table("service_pricing").insert({
+                    "provider_id": provider.get("id"),
+                    "service_type": service,
+                    "visiting_fee": body.visiting_fee,
+                    "min_price": price,
+                    "city": body.city,
+                }).execute()
+            except Exception:
+                pass
+
+        return {"success": True, "provider": provider}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/v1/engineers/{provider_id}/dashboard", tags=["Engineers"])
+async def get_engineer_dashboard(provider_id: str):
+    """Get engineer's dashboard data."""
+    db = get_db()
+    try:
+        provider = db.table("providers").select("*").eq("id", provider_id).single().execute()
+        jobs = db.table("bookings").select("*") \
+            .eq("provider_id", provider_id) \
+            .order("created_at", desc=True).limit(10).execute()
+        pricing = db.table("service_pricing").select("*") \
+            .eq("provider_id", provider_id).execute()
+        return {
+            "provider": provider.data or {},
+            "recent_jobs": jobs.data or [],
+            "pricing": pricing.data or [],
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.patch("/api/v1/engineers/{provider_id}/availability", tags=["Engineers"])
+async def update_engineer_availability(provider_id: str, body: AvailabilityBody):
+    """Update engineer's availability status."""
+    if body.status not in ["available", "busy", "offline"]:
+        raise HTTPException(status_code=400, detail="Invalid status")
+    db = get_db()
+    try:
+        db.table("providers").update({
+            "availability_status": body.status,
+            "active_status": body.status != "offline",
+        }).eq("id", provider_id).execute()
+        return {"success": True, "status": body.status}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/v1/cities/{city}/pricing", tags=["Engineers"])
+async def get_city_pricing(city: str, service_type: Optional[str] = None):
+    """Get all service pricing for a city — shown to clients before booking."""
+    db = get_db()
+    try:
+        query = db.table("service_pricing").select(
+            "*, providers(name, avg_rating, trust_score, is_verified, is_premium)"
+        ).eq("city", city)
+        if service_type:
+            query = query.eq("service_type", service_type)
+        result = query.order("min_price").limit(50).execute()
+        return {"city": city, "pricing": result.data or []}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+
